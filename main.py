@@ -8,6 +8,9 @@ Then open http://127.0.0.1:8000/docs and try the /chat endpoint.
 """
 
 import os
+from pathlib import Path
+AGENCY_FILE = Path(__file__).parent /"data"/ "agency.md"
+AGENCY_INFO = AGENCY_FILE.read_text(encoding="utf-8")  # read the agency info from a markdown file
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
@@ -15,6 +18,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 load_dotenv()  # reads ANTHROPIC_API_KEY from your .env file
+
 
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 MODEL = "claude-haiku-5-5"
@@ -52,7 +56,7 @@ def chat(req: ChatRequest):
     response = client.messages.create(
         model=MODEL,
         max_tokens=500,
-        system=SYSTEM_PROMPT,
+        system=SYSTEM_PROMPT + "\n\nUse ONLY this agency information:\n" + AGENCY_INFO,
         messages=[{"role": "user", "content": req.message}],
     )
     return ChatResponse(reply=response.content[0].text)
