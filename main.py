@@ -9,8 +9,7 @@ Then open http://127.0.0.1:8000/docs and try the /chat endpoint.
 
 import os
 from pathlib import Path
-AGENCY_FILE = Path(__file__).parent /"data"/ "agency.md"
-AGENCY_INFO = AGENCY_FILE.read_text(encoding="utf-8")  # read the agency info from a markdown file
+from rag import build_index, search
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
@@ -33,6 +32,7 @@ a trekking agency in Kathmandu, Nepal.
 - Never invent prices or dates."""
 
 app = FastAPI(title="Trek Assistant")
+CHUNK_COUNT = build_index()  # load agency chunks into ChromaDB at startup
 
 
 class ChatRequest(BaseModel):
@@ -52,11 +52,16 @@ def health():
 def chat(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message is empty")
-
+    chunks = search(req.message)
+    context = "\n\n---\n\n".join(chunks)
     response = client.messages.create(
         model=MODEL,
         max_tokens=500,
-        system=SYSTEM_PROMPT + "\n\nUse ONLY this agency information:\n" + AGENCY_INFO,
+        system=SYSTEM_PROMPT + "\n\nUse ONLY this agency information:\n" + context,
         messages=[{"role": "user", "content": req.message}],
     )
     return ChatResponse(reply=response.content[0].text)
+
+@app.get("/search")
+def search_chunks(q: str):
+    return {"chunks_indexed": CHUNK_COUNT, "results": search(q)}
