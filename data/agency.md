@@ -64,8 +64,19 @@
 - Group discounts: 10% off for groups of 6 or more
 
 ## Frequently asked questions
-- **Do I need trekking experience?** Not for Poon Hill. For ABC and Langtang, regular walking fitness is enough. For EBC, prior hiking experience is strongly recommended.
-- **What about altitude sickness?** Our itineraries include acclimatisation days. Guides carry first aid and a pulse oximeter. We descend immediately if symptoms are serious.
-- **Can I rent gear?** Yes — sleeping bags and down jackets can be rented in Thamel for about USD 1–2 per day each.
-- **Is it safe for solo female travellers?** Yes. Female guides can be requested with 2 weeks' notice.
-- **Monsoon (June–August)?** We don't recommend these treks in monsoon because of rain, leeches and landslides. Ask us about rain-shadow treks instead.
+
+### FAQ: Do I need trekking experience?
+Not for Poon Hill. For ABC and Langtang, regular walking fitness is enough. For EBC, prior hiking experience is strongly recommended.
+
+### FAQ: What about altitude sickness?
+Our itineraries include acclimatisation days. Guides carry first aid and a pulse oximeter. We descend immediately if symptoms are serious.
+
+### FAQ: Can I rent gear?
+Yes — sleeping bags and down jackets can be rented in Thamel for about USD 1–2 per day each.
+
+### FAQ: Is it safe for solo female travellers?
+Yes. Female guides can be requested with 2 weeks' notice.
+
+### FAQ: Monsoon (June–August)?
+We don't recommend these treks in monsoon because of rain, leeches and landslides. Ask us about rain-shadow treks instead.
+
