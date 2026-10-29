@@ -25,7 +25,15 @@ An AI booking assistant for trekking agencies in Nepal. It answers traveller que
 - [x] Day 5: Lead capture with Claude tool use, SQLite, `GET /leads`
 - [x] Day 6: Human handoff with urgency levels, Telegram/Gmail alerts, `GET /handoffs`
 - [x] Day 7: Embeddable web chat widget + sample agency page (`/demo`)
-- [ ] Next: deploy, WhatsApp, demo video
+- [x] Day 8: Security hardening: admin key, rate limits, input caps, fixed trek names
+- [ ] Next: deploy (Render + Supabase), WhatsApp, demo video
+
+## Security
+- **Admin endpoints** (`/leads`, `/handoffs`, `/search`) need an `X-Admin-Key` header matching `ADMIN_KEY`; compared with `secrets.compare_digest` (constant time). If `ADMIN_KEY` isn't set they refuse everyone. In `/docs`, use the Authorize button.
+- **Cost protection on `/chat`:** 20 messages per visitor per 10 min, 500 per day server-wide, 1,000-character messages, last 20 messages of history sent to Claude. Limits are in-memory (single process).
+- **Tool input is validated**, not trusted: Pydantic checks every field, and `trek` must be one of the names in `data/agency.md`.
+- **Widget output is escaped** before rendering, so a model reply can't inject HTML/JS into the agency's site.
+- **CORS:** set `ALLOWED_ORIGINS` to the agency's domain in production.
 
 ## Run locally
 ```bash
@@ -53,6 +61,6 @@ Or open http://127.0.0.1:8000/docs and try `POST /chat`:
 ## Testing
 `python chat_cli.py --test` runs 13 scripted conversations (price math across turns, solo vs group rate, inclusions, no guessing on availability, group discount, medical question, off-topic, step-by-step booking, one-message booking, incomplete booking that must not save, asking for a human, emergency on a trek, custom request). Run a subset with `--test 11 12` and prints the expected answer next to each reply.
 
-Debug retrieval with `GET /search?q=your question`. See captured leads at `GET /leads` and handoffs at `GET /handoffs` (will be protected with an admin key before deploy). Every `save_lead` call is logged in the server terminal.
+Debug retrieval with `GET /search?q=your question`. See captured leads at `GET /leads` and handoffs at `GET /handoffs` (all three need the admin key). Every `save_lead` call is logged in the server terminal.
 
 > The agency in `data/agency.md` is fictional; all prices are made up for testing.

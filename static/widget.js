@@ -227,8 +227,13 @@
           lead_id: state.lead_id, handoff_id: state.handoff_id,
         }),
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        // 429 = rate limited, 422 = message too long: show a friendly reason
+        const reason = typeof data.detail === "string" ? data.detail
+          : r.status === 422 ? "That message is too long. Please shorten it." : null;
+        throw new Error(reason || `HTTP ${r.status}`);
+      }
       showTyping(false);
       state.history.push({ role: "user", content: text }, { role: "assistant", content: data.reply });
       addItem({ type: "bot", text: data.reply });
@@ -241,7 +246,8 @@
       save();
     } catch (e) {
       showTyping(false);
-      addItem({ type: "error", text: "Couldn't reach the assistant. Please try again." });
+      const friendly = e.message && !e.message.startsWith("HTTP") && !e.message.includes("fetch");
+      addItem({ type: "error", text: friendly ? e.message : "Couldn't reach the assistant. Please try again." });
     } finally {
       busy = false; sendBtn.disabled = false; input.focus();
     }

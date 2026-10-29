@@ -89,7 +89,7 @@ TESTS = [
      "Saves straight away ([lead saved]), summary + #reference, price 4 x USD 450 = USD 1,800"),
     ("Incomplete booking must NOT save",
      ["Book EBC for me and my wife in October please"],
-     "No [lead saved] line; asks for name and contact (max 2 things)"),
+     "No [lead saved] line; asks for name and contact in one message"),
     ("Asks for a human",
      ["Can I talk to a real person please?", "Sure, it's anna@example.com"],
      "Asks for a contact first (no handoff yet); [handoff] after the email, reply gives H-reference"),

@@ -5,8 +5,8 @@ POST /chat      answers a traveller's message using the agency info (via RAG)
                 and the conversation history the client sends along.
                 Claude has two tools: save_lead (booking details -> SQLite)
                 and request_handoff (alert the team to take over).
-GET  /leads     lists captured leads (for the agency).
-GET  /handoffs  lists handoff requests (for the agency).
+GET  /leads     lists captured leads     (agency only: X-Admin-Key header)
+GET  /handoffs  lists handoff requests   (agency only: X-Admin-Key header)
 GET  /demo      sample agency website with the chat widget (static/).
 GET  /search debug: shows which agency sections retrieval picks.
 
@@ -16,20 +16,23 @@ Then open http://127.0.0.1:8000/demo, or chat with: python chat_cli.py
 """
 
 import os
+import secrets
 from pathlib import Path
 from typing import Literal
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from leads import init_db, list_handoffs, list_leads, save_handoff, save_lead
 from notify import send_alert
-from rag import build_index, pinned_chunks, search
+import ratelimit
+from rag import build_index, pinned_chunks, search, trek_names
 
 load_dotenv()  # reads ANTHROPIC_API_KEY from your .env file
 
@@ -58,8 +61,7 @@ Booking:
   contact (WhatsApp number or email).
 - Before asking anything, re-read the whole conversation. Never ask again for
   a detail the traveller already gave, and never ask them to re-confirm it.
-- Ask only for missing details, and never more than 2 per message, even if
-  more are missing. Ask for the rest in your next message.
+- Ask for all missing details together in one short message.
 - As soon as you have all 5, call the save_lead tool. Never call it with a
   missing, guessed or placeholder value.
 - After save_lead succeeds, summarise the details and the total price in one
@@ -92,6 +94,8 @@ Safety:
   recommend they consult a doctor before the trek.
 - If asked about something unrelated to trekking with us, politely steer back."""
 
+TREK_NAMES = trek_names()  # e.g. ["Poon Hill Trek", ...] from data/agency.md
+
 # The tool Claude can call. Claude never touches the database itself: it
 # only asks us to run save_lead with these fields, and our code does the rest.
 SAVE_LEAD_TOOL = {
@@ -105,7 +109,11 @@ SAVE_LEAD_TOOL = {
         "type": "object",
         "properties": {
             "name": {"type": "string", "description": "Traveller's name"},
-            "trek": {"type": "string", "description": "Full trek name, e.g. 'Langtang Valley Trek'"},
+            "trek": {
+                "type": "string",
+                "enum": TREK_NAMES,  # Claude must pick one of these exact names
+                "description": "The trek, exactly as named in the agency information",
+            },
             "start_date": {"type": "string", "description": "Travel start date as the traveller gave it, e.g. '5 April'"},
             "group_size": {"type": "integer", "description": "Number of trekkers, including the traveller"},
             "contact": {"type": "string", "description": "WhatsApp number or email address"},
@@ -139,7 +147,8 @@ REQUEST_HANDOFF_TOOL = {
 }
 
 TOOLS = [SAVE_LEAD_TOOL, REQUEST_HANDOFF_TOOL]
-MAX_TOOL_ROUNDS = 3  # safety limit so a confused model can't loop forever
+MAX_TOOL_ROUNDS = 3
+MAX_HISTORY = 20  # only send the last 20 messages to Claude (cost control)  # safety limit so a confused model can't loop forever
 
 app = FastAPI(title="Trek Assistant")
 
@@ -161,11 +170,11 @@ PINNED = pinned_chunks()     # rule sections, sent with every question
 
 class Message(BaseModel):
     role: Literal["user", "assistant"]
-    content: str
+    content: str = Field(max_length=4000)
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(max_length=1000)  # stops huge (expensive) messages
     history: list[Message] = []
     lead_id: int | None = None     # the client sends these back once saved,
     handoff_id: int | None = None  # because the server remembers nothing
@@ -185,6 +194,13 @@ class Lead(BaseModel):
     group_size: int = Field(ge=1, le=50)
     contact: str = Field(min_length=5)
     notes: str = ""
+
+    @field_validator("trek")
+    @classmethod
+    def known_trek(cls, value: str) -> str:
+        if value not in TREK_NAMES:
+            raise ValueError(f"must be one of {TREK_NAMES}")
+        return value
 
 
 class Handoff(BaseModel):
@@ -243,15 +259,42 @@ def retrieve(message: str, history: list[Message]) -> list[str]:
     return list(dict.fromkeys(found))  # drop duplicates, keep order
 
 
+# ---------- security helpers (Day 8)
+
+admin_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
+
+
+def require_admin(key: str | None = Security(admin_key_header)):
+    """Only the agency (who knows ADMIN_KEY) may read leads and handoffs."""
+    expected = os.getenv("ADMIN_KEY")
+    if not expected:
+        raise HTTPException(503, "Set ADMIN_KEY in .env to use this endpoint")
+    # compare_digest takes the same time whether 1 or 30 characters match,
+    # so an attacker can't guess the key character by character
+    if not key or not secrets.compare_digest(key, expected):
+        raise HTTPException(401, "Missing or wrong X-Admin-Key")
+
+
+def client_ip(request: Request) -> str:
+    """The visitor's IP. Behind a host like Render, the real IP is in the
+    X-Forwarded-For header (the direct connection is the host's proxy)."""
+    forwarded = request.headers.get("x-forwarded-for")
+    return forwarded.split(",")[0].strip() if forwarded else request.client.host
+
+
 @app.get("/")
 def health():
     return {"status": "ok"}
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, request: Request):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message is empty")
+    blocked = ratelimit.check(client_ip(request))
+    if blocked:
+        raise HTTPException(status_code=429, detail=blocked)
+    req.history = req.history[-MAX_HISTORY:]
 
     context = "\n\n---\n\n".join(PINNED + retrieve(req.message, req.history))
     system = SYSTEM_PROMPT + "\n\nUse ONLY this agency information:\n" + context
@@ -319,19 +362,17 @@ def demo_page():
     return FileResponse(STATIC_DIR / "index.html")
 
 
-@app.get("/leads")
+@app.get("/leads", dependencies=[Depends(require_admin)])
 def get_leads():
-    # TODO before deploying: protect this with an admin key
     return {"leads": list_leads()}
 
 
-@app.get("/handoffs")
+@app.get("/handoffs", dependencies=[Depends(require_admin)])
 def get_handoffs():
-    # TODO before deploying: protect this with an admin key
     return {"handoffs": list_handoffs()}
 
 
-@app.get("/search")
+@app.get("/search", dependencies=[Depends(require_admin)])
 def search_chunks(q: str):
     return {"chunks_indexed": CHUNK_COUNT, "results": search(q)
 }

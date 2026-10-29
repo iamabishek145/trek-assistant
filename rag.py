@@ -61,6 +61,18 @@ def pinned_chunks() -> list[str]:
     return [c for c in load_chunks() if c.startswith(PINNED_HEADINGS)]
 
 
+def trek_names() -> list[str]:
+    """Trek names from the '## Treks' section, e.g. 'Poon Hill Trek'.
+    Used so leads always store one of these exact names."""
+    names, in_treks = [], False
+    for line in DATA_FILE.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            in_treks = line.strip() == "## Treks"
+        elif in_treks and line.startswith("### "):
+            names.append(line[4:].strip())
+    return names
+
+
 def build_index() -> int:
     """(Re)load the searchable chunks (treks, FAQs) into Chroma."""
     chunks = [c for c in load_chunks() if not c.startswith(PINNED_HEADINGS)]
