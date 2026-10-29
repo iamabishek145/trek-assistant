@@ -2,9 +2,12 @@
 
 An AI booking assistant for trekking agencies in Nepal. It answers traveller questions from the agency's own information (treks, prices, permits, policies) and collects booking details.
 
-**Stack:** Python · FastAPI · Claude API (Haiku, tool use) · ChromaDB (RAG) · SQLite · Telegram/Gmail alerts · *coming:* Supabase, WhatsApp Cloud API
+**Stack:** Python · FastAPI · Claude API (Haiku, tool use) · ChromaDB (RAG) · SQLite · Telegram/Gmail alerts · vanilla JS widget (Shadow DOM) · *coming:* Supabase, WhatsApp Cloud API
+
+**Try it:** run the server and open http://127.0.0.1:8000/demo, a sample agency site with the chat widget.
 
 ## How it works
+0. **Widget:** an agency adds one line to their site: `<script src="https://SERVER/static/widget.js" data-name="Agency" data-color="#0f3d3e" defer></script>`. The widget lives in a Shadow DOM (the agency's CSS can't break it), escapes all bot output before rendering, keeps the chat across page reloads, and goes full-screen on phones. Pages can open it with a question: `TrekAssistant.open("Tell me about EBC")`.
 1. The client sends a message plus the conversation history to `POST /chat`.
 2. **Retrieval:** the agency info (`data/agency.md`) is split into sections.
    - **Pinned sections** (inclusions, booking rules, discounts) are sent with every question. Semantic search kept missing them because a question like "total for 6 people?" doesn't *sound* like a discount policy.
@@ -21,7 +24,8 @@ An AI booking assistant for trekking agencies in Nepal. It answers traveller que
 - [x] Day 4: Conversation history, tighter prompt, pinned rule sections, CLI test client
 - [x] Day 5: Lead capture with Claude tool use, SQLite, `GET /leads`
 - [x] Day 6: Human handoff with urgency levels, Telegram/Gmail alerts, `GET /handoffs`
-- [ ] Next: web chat widget, deploy, WhatsApp, demo video
+- [x] Day 7: Embeddable web chat widget + sample agency page (`/demo`)
+- [ ] Next: deploy, WhatsApp, demo video
 
 ## Run locally
 ```bash
@@ -34,7 +38,9 @@ uvicorn main:app --reload
 
 Optional handoff alerts: fill in the Telegram or Gmail settings in `.env` (see `.env.example`), then run `python notify.py` to test. Without them, alerts print in the server terminal.
 
-Chat from the terminal (in a second terminal, keeps history for you):
+Open **http://127.0.0.1:8000/demo** to use the chat widget on a sample agency page.
+
+Or chat from the terminal (in a second terminal, keeps history for you):
 ```bash
 python chat_cli.py
 ```

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Himalaya Trails Demo — Treks in Nepal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <!-- This page is a stand-in for an agency's real website.
+       The only line the agency needs is the <script> tag at the bottom. -->
+  <style>
+    :root {
+      --ink: #15201f; --muted: #5b6764; --pine: #0f3d3e; --snow: #fbfaf7;
+      --sand: #f1ece3; --saffron: #e08a1e; --line: #e4ded3;
+    }
+    * { box-sizing: border-box; margin: 0; }
+    body { font-family: "DM Sans", system-ui, sans-serif; color: var(--ink); background: var(--snow); }
+    .demo-banner { background: var(--ink); color: #cfd8d6; font-size: 13px; text-align: center; padding: 8px 16px; }
+    .demo-banner b { color: #fff; }
+    nav { display: flex; align-items: center; justify-content: space-between;
+          max-width: 1100px; margin: 0 auto; padding: 20px; }
+    .logo { font-family: Fraunces, serif; font-size: 22px; font-weight: 700; color: var(--pine); }
+    .logo span { color: var(--saffron); }
+    nav ul { list-style: none; display: flex; gap: 28px; padding: 0; font-size: 15px; color: var(--muted); }
+    .hero { position: relative; overflow: hidden; color: #fff;
+            background: linear-gradient(180deg, #2c5d63 0%, #0f3d3e 70%); }
+    .hero-inner { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 90px 20px 190px; }
+    .eyebrow { font-size: 13px; letter-spacing: .14em; text-transform: uppercase; color: #f6c27a; font-weight: 600; }
+    h1 { font-family: Fraunces, serif; font-size: clamp(36px, 6vw, 64px); line-height: 1.05;
+         max-width: 720px; margin: 14px 0 18px; }
+    .hero p { font-size: 18px; max-width: 520px; color: #d6e4e2; line-height: 1.55; }
+    .cta { display: inline-block; margin-top: 28px; background: var(--saffron); color: #1b1206;
+           border: 0; font: inherit; font-weight: 700; padding: 14px 24px; border-radius: 999px; cursor: pointer; }
+    .mountains { position: absolute; left: 0; right: 0; bottom: -1px; width: 100%; height: 220px; }
+    section.treks { max-width: 1100px; margin: 0 auto; padding: 70px 20px; }
+    h2 { font-family: Fraunces, serif; font-size: 34px; margin-bottom: 8px; }
+    .sub { color: var(--muted); margin-bottom: 32px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 22px;
+            display: flex; flex-direction: column; gap: 10px; }
+    .tag { align-self: flex-start; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
+           background: var(--sand); color: var(--pine); }
+    .card h3 { font-size: 19px; }
+    .meta { font-size: 14px; color: var(--muted); line-height: 1.6; }
+    .price { font-size: 15px; margin-top: auto; padding-top: 8px; }
+    .price b { font-size: 22px; color: var(--pine); }
+    .ask { border: 1px solid var(--pine); background: transparent; color: var(--pine); font: inherit;
+           font-weight: 600; font-size: 14px; padding: 10px; border-radius: 10px; cursor: pointer; }
+    .ask:hover { background: var(--pine); color: #fff; }
+    footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 14px;
+             text-align: center; padding: 30px 20px 100px; }
+    @media (max-width: 640px) { nav ul { display: none; } .hero-inner { padding: 60px 20px 150px; } }
+  </style>
+</head>
+<body>
+  <div class="demo-banner"><b>Demo:</b> fictional agency built to showcase Trek Assistant. Prices are made up.</div>
+
+  <nav>
+    <div class="logo">Himalaya <span>Trails</span></div>
+    <ul><li>Treks</li><li>About</li><li>Contact</li></ul>
+  </nav>
+
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="eyebrow">Thamel, Kathmandu · Since 2026</div>
+      <h1>Walk the Himalaya with people who call it home.</h1>
+      <p>Licensed local guides, porters and teahouse stays. Ask our assistant anything, any hour, and we'll handle the rest.</p>
+      <button class="cta" onclick="TrekAssistant.open()">Ask about a trek →</button>
+    </div>
+    <svg class="mountains" viewBox="0 0 1440 220" preserveAspectRatio="none" aria-hidden="true">
+      <path fill="#3f7a7e" opacity=".55" d="M0 150 L180 70 L300 130 L460 40 L640 140 L820 60 L980 125 L1160 30 L1300 110 L1440 70 V220 H0Z"/>
+      <path fill="#e9f1f0" opacity=".9" d="M460 40 L500 62 L478 60 L460 72 L440 58 L420 62Z M1160 30 L1200 52 L1176 50 L1160 62 L1142 50 L1122 54Z"/>
+      <path fill="#fbfaf7" d="M0 190 L220 120 L380 175 L560 105 L760 180 L940 115 L1120 170 L1300 120 L1440 160 V220 H0Z"/>
+    </svg>
+  </header>
+
+  <section class="treks">
+    <h2>Our treks</h2>
+    <p class="sub">Every trek includes a licensed guide, porter, permits, teahouse meals and trailhead transport.</p>
+    <div class="grid">
+      <div class="card">
+        <span class="tag">Easy · 5 days</span>
+        <h3>Poon Hill</h3>
+        <p class="meta">Sunrise over Annapurna and Dhaulagiri. Great first trek.</p>
+        <p class="price">from <b>USD 450</b> pp</p>
+        <button class="ask" onclick="TrekAssistant.open('Tell me about the Poon Hill trek')">Ask the assistant</button>
+      </div>
+      <div class="card">
+        <span class="tag">Moderate · 10 days</span>
+        <h3>Annapurna Base Camp</h3>
+        <p class="meta">An amphitheatre of peaks, and Jhinu hot springs on the way down.</p>
+        <p class="price">from <b>USD 890</b> pp</p>
+        <button class="ask" onclick="TrekAssistant.open('Tell me about the Annapurna Base Camp trek')">Ask the assistant</button>
+      </div>
+      <div class="card">
+        <span class="tag">Challenging · 14 days</span>
+        <h3>Everest Base Camp</h3>
+        <p class="meta">Namche Bazaar, Tengboche and Kala Patthar. Lukla flights included.</p>
+        <p class="price">from <b>USD 1,650</b> pp</p>
+        <button class="ask" onclick="TrekAssistant.open('Tell me about the Everest Base Camp trek')">Ask the assistant</button>
+      </div>
+      <div class="card">
+        <span class="tag">Moderate · 8 days</span>
+        <h3>Langtang Valley</h3>
+        <p class="meta">Tamang villages and Kyanjin Gompa, close to Kathmandu.</p>
+        <p class="price">from <b>USD 720</b> pp</p>
+        <button class="ask" onclick="TrekAssistant.open('Tell me about the Langtang Valley trek')">Ask the assistant</button>
+      </div>
+    </div>
+  </section>
+
+  <footer>Himalaya Trails Demo · Thamel, Kathmandu · Fictional agency for demo purposes</footer>
+
+  <!-- ↓ This is the ONLY line an agency adds to their own website ↓ -->
+  <script src="/static/widget.js" data-name="Himalaya Trails" data-color="#0f3d3e" defer></script>
+</body>
+</html>

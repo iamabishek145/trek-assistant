@@ -7,19 +7,24 @@ POST /chat      answers a traveller's message using the agency info (via RAG)
                 and request_handoff (alert the team to take over).
 GET  /leads     lists captured leads (for the agency).
 GET  /handoffs  lists handoff requests (for the agency).
+GET  /demo      sample agency website with the chat widget (static/).
 GET  /search debug: shows which agency sections retrieval picks.
 
 Run:
     uvicorn main:app --reload
-Then open http://127.0.0.1:8000/docs, or chat with: python chat_cli.py
+Then open http://127.0.0.1:8000/demo, or chat with: python chat_cli.py
 """
 
 import os
+from pathlib import Path
 from typing import Literal
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 from leads import init_db, list_handoffs, list_leads, save_handoff, save_lead
@@ -137,6 +142,18 @@ TOOLS = [SAVE_LEAD_TOOL, REQUEST_HANDOFF_TOOL]
 MAX_TOOL_ROUNDS = 3  # safety limit so a confused model can't loop forever
 
 app = FastAPI(title="Trek Assistant")
+
+# The widget can be embedded on an agency's own website (a different domain),
+# so the browser needs CORS permission to call /chat. "*" is fine for local
+# development; before deploying, set ALLOWED_ORIGINS to the agency's domain.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=(os.getenv("ALLOWED_ORIGINS") or "*").split(","),
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
+STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 init_db()                    # create leads.db + table if needed
 CHUNK_COUNT = build_index()  # load trek + FAQ chunks into ChromaDB at startup
 PINNED = pinned_chunks()     # rule sections, sent with every question
@@ -294,6 +311,12 @@ def chat(req: ChatRequest):
     if not reply:
         reply = "Sorry, something went wrong on our side. A team member will follow up."
     return ChatResponse(reply=reply, lead_id=lead_id, handoff_id=handoff_id)
+
+
+@app.get("/demo")
+def demo_page():
+    """A sample agency website with the chat widget on it."""
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/leads")
