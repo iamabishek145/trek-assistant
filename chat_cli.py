@@ -1,16 +1,18 @@
 """
-chat_cli.py — Day 4: talk to the Trek Assistant from the terminal.
+chat_cli.py — talk to the Trek Assistant from the terminal.
 
 The /chat endpoint is stateless: it only knows what you send it. This client
-keeps the conversation history and sends it with every message, the same
-way a real chat widget or WhatsApp integration will.
+keeps the conversation history (and any saved lead / handoff id) and sends
+it with every message, the same way a real chat widget or WhatsApp
+integration will.
 
 Start the server first (in another terminal):
     uvicorn main:app --reload
 
 Then:
-    python chat_cli.py          # chat yourself (type 'quit' to stop, 'reset' to start over)
-    python chat_cli.py --test   # run the scripted test conversations below
+    python chat_cli.py            # chat yourself ('quit' to stop, 'reset' to start over)
+    python chat_cli.py --test     # run all scripted test conversations
+    python chat_cli.py --test 11  # run only test 11 (or e.g. --test 11 12)
 """
 
 import sys
@@ -20,29 +22,36 @@ import httpx
 API_URL = "http://127.0.0.1:8000/chat"
 
 
-def send(message: str, history: list[dict], lead_id: int | None) -> tuple[str, int | None]:
-    """Send a message + history + any saved lead id. Returns (reply, lead_id)."""
-    payload = {"message": message, "history": history, "lead_id": lead_id}
-    r = httpx.post(API_URL, json=payload, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-    return data["reply"], data.get("lead_id")
+class Conversation:
+    """One traveller's chat: history plus the ids the server gave us."""
 
+    def __init__(self):
+        self.history: list[dict] = []
+        self.lead_id: int | None = None
+        self.handoff_id: int | None = None
 
-def lead_note(old_id: int | None, new_id: int | None) -> str:
-    return f"\n  [lead saved to database: #{new_id}]" if new_id and new_id != old_id else ""
+    def send(self, message: str) -> str:
+        payload = {
+            "message": message,
+            "history": self.history,
+            "lead_id": self.lead_id,
+            "handoff_id": self.handoff_id,
+        }
+        r = httpx.post(API_URL, json=payload, timeout=60)
+        r.raise_for_status()
+        data = r.json()
 
+        notes = ""
+        if data.get("lead_id") and data["lead_id"] != self.lead_id:
+            notes += f"\n  [lead saved to database: #{data['lead_id']}]"
+        if data.get("handoff_id") and data["handoff_id"] != self.handoff_id:
+            notes += f"\n  [handoff: team alerted, H-{data['handoff_id']}]"
+        self.lead_id = data.get("lead_id")
+        self.handoff_id = data.get("handoff_id")
 
-def run_conversation(turns: list[str]) -> None:
-    """Play a list of user messages, carrying history between them."""
-    history: list[dict] = []
-    lead_id = None
-    for message in turns:
-        reply, new_id = send(message, history, lead_id)
-        print(f"\n  YOU: {message}\n  BOT: {reply}{lead_note(lead_id, new_id)}")
-        lead_id = new_id
-        history.append({"role": "user", "content": message})
-        history.append({"role": "assistant", "content": reply})
+        self.history.append({"role": "user", "content": message})
+        self.history.append({"role": "assistant", "content": data["reply"]})
+        return data["reply"] + notes
 
 
 # Each test: (name, user messages in order, what a correct answer looks like)
@@ -56,9 +65,9 @@ TESTS = [
     ("Included items",
      ["Do I pay extra for permits on the ABC trek?"],
      "No: permits are included (ACAP, TIMS)"),
-    ("Unknown info -> no guessing",
+    ("Unknown info -> no guessing, no handoff",
      ["Do you have space on a Poon Hill trek starting 12 March?"],
-     "A team member will confirm availability; no invented answer"),
+     "A team member will confirm availability; no invented answer; NO handoff"),
     ("Group discount",
      ["We are 6 friends. What's the total for Annapurna Base Camp?"],
      "6 x USD 890 = USD 5,340, minus 10% = USD 4,806"),
@@ -81,41 +90,53 @@ TESTS = [
     ("Incomplete booking must NOT save",
      ["Book EBC for me and my wife in October please"],
      "No [lead saved] line; asks for name and contact (max 2 things)"),
+    ("Asks for a human",
+     ["Can I talk to a real person please?", "Sure, it's anna@example.com"],
+     "Asks for a contact first (no handoff yet); [handoff] after the email, reply gives H-reference"),
+    ("Emergency on a trek",
+     ["Help! Our guide didn't show up and we're stuck in Ghandruk with no transport"],
+     "[handoff] straight away (URGENT in server log) + gives agency WhatsApp +977-9800000000"),
+    ("Custom request not in our data",
+     ["Can you organise a 21-day Manaslu circuit with a private cook?",
+      "My WhatsApp is +977 9812345678",
+      "Great, thanks!"],
+     "Says it's not a listed trek, offers the team; [handoff] after the number; "
+     "no second handoff on 'thanks'"),
 ]
 
 
-def run_tests() -> None:
+def run_tests(only: list[int]) -> None:
     for i, (name, turns, expected) in enumerate(TESTS, 1):
+        if only and i not in only:
+            continue
         print(f"\n=== Test {i}: {name}")
-        run_conversation(turns)
+        chat = Conversation()
+        for message in turns:
+            print(f"\n  YOU: {message}\n  BOT: {chat.send(message)}")
         print(f"  EXPECTED: {expected}")
     print("\nRead each reply against EXPECTED and note any that fail.")
 
 
 def interactive() -> None:
-    history: list[dict] = []
-    lead_id = None
-    print("Trek Assistant — type 'quit' to stop, 'reset' to clear history.")
+    chat = Conversation()
+    print("Trek Assistant — type 'quit' to stop, 'reset' to start a new traveller.")
     while True:
         message = input("\nYOU: ").strip()
         if message.lower() == "quit":
             break
         if message.lower() == "reset":
-            history = []
-            lead_id = None
-            print("(history cleared)")
+            chat = Conversation()
+            print("(new conversation)")
             continue
-        if not message:
-            continue
-        reply, new_id = send(message, history, lead_id)
-        print(f"BOT: {reply}{lead_note(lead_id, new_id)}")
-        lead_id = new_id
-        history.append({"role": "user", "content": message})
-        history.append({"role": "assistant", "content": reply})
+        if message:
+            print(f"BOT: {chat.send(message)}")
 
 
 if __name__ == "__main__":
     try:
-        run_tests() if "--test" in sys.argv else interactive()
+        if "--test" in sys.argv:
+            run_tests([int(a) for a in sys.argv[2:] if a.isdigit()])
+        else:
+            interactive()
     except httpx.ConnectError:
         print("Can't reach the server. Start it first: uvicorn main:app --reload")

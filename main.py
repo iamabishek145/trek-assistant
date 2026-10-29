@@ -1,11 +1,12 @@
 """
 Trek Assistant — FastAPI server.
 
-POST /chat   answers a traveller's message using the agency info (via RAG)
-             and the conversation history the client sends along. When the
-             traveller has given all booking details, Claude calls the
-             save_lead tool and the lead is stored in SQLite.
-GET  /leads  lists captured leads (for the agency).
+POST /chat      answers a traveller's message using the agency info (via RAG)
+                and the conversation history the client sends along.
+                Claude has two tools: save_lead (booking details -> SQLite)
+                and request_handoff (alert the team to take over).
+GET  /leads     lists captured leads (for the agency).
+GET  /handoffs  lists handoff requests (for the agency).
 GET  /search debug: shows which agency sections retrieval picks.
 
 Run:
@@ -21,7 +22,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 
-from leads import init_db, list_leads, save_lead
+from leads import init_db, list_handoffs, list_leads, save_handoff, save_lead
+from notify import send_alert
 from rag import build_index, pinned_chunks, search
 
 load_dotenv()  # reads ANTHROPIC_API_KEY from your .env file
@@ -63,6 +65,23 @@ Booking:
   save_lead again and don't apologise for it, unless the traveller changes
   one of the details.
 
+Handing over to a human:
+- Call request_handoff when the traveller asks for a real person, has a
+  problem or complaint, has an emergency during a trek, or wants something
+  that isn't in the agency information (e.g. a custom itinerary or a trek
+  we don't list).
+- Don't hand off for normal questions about prices, dates or availability:
+  collect the booking details instead.
+- Before calling it, make sure you have a contact (WhatsApp or email) so the
+  team can reach them. If it's missing, ask for it once.
+- Emergencies (stranded, injured, unsafe, guide missing): call it straight
+  away with priority "urgent", even without a contact, and give the agency
+  WhatsApp number from the agency information.
+- After it succeeds, say a team member will contact them soon and give the
+  handoff reference (e.g. H-3).
+- If an earlier message of yours already gives a handoff reference, don't
+  call request_handoff again.
+
 Safety:
 - For altitude sickness or medical questions, give the agency's guidance and
   recommend they consult a doctor before the trek.
@@ -91,6 +110,30 @@ SAVE_LEAD_TOOL = {
     },
 }
 
+REQUEST_HANDOFF_TOOL = {
+    "name": "request_handoff",
+    "description": (
+        "Alert the agency team so a human takes over this conversation. Use "
+        "when the traveller asks for a person, has a problem, complaint or "
+        "emergency, or wants something not covered in the agency information."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "reason": {"type": "string", "description": "One sentence the team can act on"},
+            "priority": {
+                "type": "string",
+                "enum": ["normal", "urgent"],
+                "description": "urgent ONLY for safety problems or a traveller stuck on a trek",
+            },
+            "name": {"type": "string", "description": "Traveller's name, if known"},
+            "contact": {"type": "string", "description": "WhatsApp number or email, if known"},
+        },
+        "required": ["reason", "priority"],
+    },
+}
+
+TOOLS = [SAVE_LEAD_TOOL, REQUEST_HANDOFF_TOOL]
 MAX_TOOL_ROUNDS = 3  # safety limit so a confused model can't loop forever
 
 app = FastAPI(title="Trek Assistant")
@@ -107,12 +150,14 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: list[Message] = []
-    lead_id: int | None = None  # the client sends this back once a lead is saved
+    lead_id: int | None = None     # the client sends these back once saved,
+    handoff_id: int | None = None  # because the server remembers nothing
 
 
 class ChatResponse(BaseModel):
     reply: str
-    lead_id: int | None = None  # set when this message created/updated a lead
+    lead_id: int | None = None     # set once a lead is saved
+    handoff_id: int | None = None  # set once the team has been alerted
 
 
 class Lead(BaseModel):
@@ -125,6 +170,13 @@ class Lead(BaseModel):
     notes: str = ""
 
 
+class Handoff(BaseModel):
+    reason: str = Field(min_length=5)
+    priority: Literal["normal", "urgent"]
+    name: str = ""
+    contact: str = ""
+
+
 def run_save_lead(tool_input: dict) -> tuple[str, bool, int | None]:
     """Run the save_lead tool. Returns (message for Claude, is_error, lead_id)."""
     try:
@@ -135,6 +187,33 @@ def run_save_lead(tool_input: dict) -> tuple[str, bool, int | None]:
         return f"Not saved. Fix these with the traveller first: {problems}", True, None
     lead_id = save_lead(**lead.model_dump())
     return f"Saved. Booking reference: #{lead_id}", False, lead_id
+
+
+def run_request_handoff(tool_input: dict, transcript: str) -> tuple[str, bool, int | None]:
+    """Save the handoff and alert the team. Returns (message for Claude, is_error, id)."""
+    try:
+        handoff = Handoff(**tool_input)
+    except ValidationError as e:
+        problems = ", ".join(f"{err['loc'][0]}: {err['msg']}" for err in e.errors())
+        return f"Not saved: {problems}", True, None
+    handoff_id = save_handoff(**handoff.model_dump(), transcript=transcript)
+
+    icon = "🚨 URGENT" if handoff.priority == "urgent" else "🙋"
+    who = " ".join(filter(None, [handoff.name, f"({handoff.contact})" if handoff.contact else ""]))
+    send_alert(
+        subject=f"{icon} Handoff H-{handoff_id}: {handoff.reason}",
+        text=(f"Traveller: {who or 'unknown, no contact given'}\n"
+              f"Reason: {handoff.reason}\n\nLast messages:\n{transcript}"),
+    )
+    return f"Team alerted. Handoff reference: H-{handoff_id}", False, handoff_id
+
+
+def make_transcript(history: list[Message], message: str) -> str:
+    """The last few messages, so the human sees the context."""
+    lines = [f"{'Traveller' if m.role == 'user' else 'Bot'}: {m.content[:300]}"
+             for m in history[-6:]]
+    lines.append(f"Traveller: {message}")
+    return "\n".join(lines)
 
 
 def retrieve(message: str, history: list[Message]) -> list[str]:
@@ -163,10 +242,13 @@ def chat(req: ChatRequest):
         # The server is stateless: this is how it knows a save already happened
         system += (f"\n\nThis traveller's booking is ALREADY SAVED as #{req.lead_id}. "
                    "Only call save_lead again if they change a detail.")
+    if req.handoff_id:
+        system += (f"\n\nThe team was ALREADY ALERTED (handoff H-{req.handoff_id}). "
+                   "Don't call request_handoff again; reassure them someone is coming.")
 
     messages = [m.model_dump() for m in req.history]
     messages.append({"role": "user", "content": req.message})
-    lead_id = req.lead_id
+    lead_id, handoff_id = req.lead_id, req.handoff_id
 
     # The tool-use loop:
     # 1. Ask Claude. 2. If it wants a tool, run it and send back the result.
@@ -178,7 +260,7 @@ def chat(req: ChatRequest):
             model=MODEL,
             max_tokens=500,
             system=system,
-            tools=[SAVE_LEAD_TOOL],
+            tools=TOOLS,
             tool_choice={"type": "none"} if last_round else {"type": "auto"},
             messages=messages,
         )
@@ -187,29 +269,43 @@ def chat(req: ChatRequest):
 
         tool_results = []
         for block in response.content:
-            if block.type == "tool_use" and block.name == "save_lead":
+            if block.type != "tool_use":
+                continue
+            if block.name == "save_lead":
                 text, is_error, saved_id = run_save_lead(block.input)
-                print(f"[tool] save_lead {block.input} -> {text}")  # server log
                 lead_id = saved_id or lead_id
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": text,
-                    "is_error": is_error,
-                })
+            elif block.name == "request_handoff":
+                transcript = make_transcript(req.history, req.message)
+                text, is_error, saved_id = run_request_handoff(block.input, transcript)
+                handoff_id = saved_id or handoff_id
+            else:
+                text, is_error = f"Unknown tool {block.name}", True
+            print(f"[tool] {block.name} {block.input} -> {text}")  # server log
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": text,
+                "is_error": is_error,
+            })
         messages.append({"role": "assistant", "content": response.content})
         messages.append({"role": "user", "content": tool_results})
 
     reply = "".join(b.text for b in response.content if b.type == "text").strip()
     if not reply:
         reply = "Sorry, something went wrong on our side. A team member will follow up."
-    return ChatResponse(reply=reply, lead_id=lead_id)
+    return ChatResponse(reply=reply, lead_id=lead_id, handoff_id=handoff_id)
 
 
 @app.get("/leads")
 def get_leads():
     # TODO before deploying: protect this with an admin key
     return {"leads": list_leads()}
+
+
+@app.get("/handoffs")
+def get_handoffs():
+    # TODO before deploying: protect this with an admin key
+    return {"handoffs": list_handoffs()}
 
 
 @app.get("/search")

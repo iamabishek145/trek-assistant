@@ -1,5 +1,5 @@
 """
-leads.py — Day 5: store booking leads in SQLite.
+leads.py — store booking leads (Day 5) and human handoffs (Day 6) in SQLite.
 
 SQLite is a full database that lives in a single file (leads.db) and ships
 with Python, so there is nothing to install. When we deploy, this file is
@@ -36,6 +36,20 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS handoffs (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at  TEXT DEFAULT CURRENT_TIMESTAMP,  -- UTC
+                reason      TEXT NOT NULL,
+                priority    TEXT NOT NULL DEFAULT 'normal',  -- normal / urgent
+                name        TEXT DEFAULT '',
+                contact     TEXT DEFAULT '',
+                transcript  TEXT DEFAULT '',  -- last messages, for context
+                status      TEXT DEFAULT 'open'  -- open / done
+            )
+            """
+        )
 
 
 def save_lead(name: str, trek: str, start_date: str, group_size: int,
@@ -69,4 +83,23 @@ def list_leads() -> list[dict]:
     """All leads, newest first."""
     with _connect() as conn:
         rows = conn.execute("SELECT * FROM leads ORDER BY id DESC").fetchall()
+    return [dict(row) for row in rows]
+
+
+def save_handoff(reason: str, priority: str, name: str, contact: str,
+                 transcript: str) -> int:
+    """Save a handoff request and return its id."""
+    with _connect() as conn:
+        cursor = conn.execute(
+            "INSERT INTO handoffs (reason, priority, name, contact, transcript) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (reason, priority, name, contact, transcript),
+        )
+        return cursor.lastrowid
+
+
+def list_handoffs() -> list[dict]:
+    """All handoffs, newest first."""
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM handoffs ORDER BY id DESC").fetchall()
     return [dict(row) for row in rows]
