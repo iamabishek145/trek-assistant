@@ -1,6 +1,7 @@
 """
-Trek Assistant — Day 1
-A tiny FastAPI server that sends a message to Claude and returns the reply.
+Trek Assistant — FastAPI server.
+POST /chat: answers a traveller's message using the agency info (via RAG)
+and the conversation history the client sends along.
 
 Run:
     uvicorn main:app --reload
@@ -8,9 +9,8 @@ Then open http://127.0.0.1:8000/docs and try the /chat endpoint.
 """
 
 import os
-from pathlib import Path
 from typing import Literal
-from rag import build_index, search
+from rag import build_index, pinned_chunks, search
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
@@ -33,13 +33,21 @@ How to answer:
 - Keep answers short and clear (2-4 sentences), in plain friendly English.
 - Prices are in USD. Use the group rate for 2+ people and the solo rate for 1.
   When you calculate a total, show the math (e.g. 3 x USD 450 = USD 1,350).
+- Before giving a total, check the booking section for group discounts and
+  apply any that fit (e.g. 7 x USD 720 = USD 5,040, minus 10% = USD 4,536).
+- The 20% deposit is part of the total price, not an extra charge.
 - Check the "What's included" section before saying something costs extra.
   Permits, guide, porter, teahouse meals and trailhead transport are included.
 
 Booking:
-- When a traveller shows interest in booking, ask for any missing details:
-  name, trek, travel dates and group size. Ask for at most 2 things at a time.
-- Don't repeat questions the traveller already answered earlier in the chat.
+- To book, you need 5 details: name, trek, travel dates, group size, and a
+  contact (WhatsApp number or email).
+- Before asking anything, re-read the whole conversation. Never ask again for
+  a detail the traveller already gave, and never ask them to re-confirm it.
+- Ask only for missing details, and never more than 2 per message, even if
+  more are missing. Ask for the rest in your next message.
+- Once you have all 5, summarise them in one line and say a team member will
+  contact them to confirm availability and the deposit.
 
 Safety:
 - For altitude sickness or medical questions, give the agency's guidance and
@@ -47,7 +55,8 @@ Safety:
 - If asked about something unrelated to trekking with us, politely steer back."""
 
 app = FastAPI(title="Trek Assistant")
-CHUNK_COUNT = build_index()  # load agency chunks into ChromaDB at startup
+CHUNK_COUNT = build_index()  # load trek + FAQ chunks into ChromaDB at startup
+PINNED = pinned_chunks()  # rule sections, sent with every question
 
 
 class Message(BaseModel):
@@ -71,7 +80,7 @@ def chat(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="Message is empty")
     recent = [m.content for m in req.history[-4:]] + [req.message]
-    chunks = search(" ".join(recent))
+    chunks = PINNED + search(" ".join(recent))
     context = "\n\n---\n\n".join(chunks)
     response = client.messages.create(
         model=MODEL,

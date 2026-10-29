@@ -2,7 +2,8 @@
 rag.py — Day 3: Retrieval-Augmented Generation (RAG)
 
 1. Split data/agency.md into small chunks (one per section).
-2. Store them in ChromaDB. Chroma turns each chunk into an embedding
+   Rule sections (inclusions, booking, discounts) are pinned: always sent.
+2. Store the rest (treks, FAQs) in ChromaDB. Chroma turns each chunk into an embedding
    (a list of numbers that captures its meaning) using a small local model.
 3. search(question) finds the chunks whose meaning is closest to the question.
 """
@@ -19,6 +20,16 @@ chroma = chromadb.PersistentClient(path=str(DB_PATH))
 
 # A "collection" is like a table: here, all chunks for one agency
 collection = chroma.get_or_create_collection(name="agency")
+
+# Rules that can matter for ANY question (inclusions, discounts, payment).
+# Search can miss these because they don't "sound like" the question,
+# so they are always sent to Claude and kept out of the search index.
+PINNED_HEADINGS = (
+    "## About us",
+    "## What's included",
+    "## Not included",
+    "## Booking and payment",
+)
 
 
 def split_into_chunks(text: str) -> list[str]:
@@ -41,9 +52,18 @@ def split_into_chunks(text: str) -> list[str]:
     return [chunk for chunk in chunks if len(chunk) > 30]
 
 
+def load_chunks() -> list[str]:
+    return split_into_chunks(DATA_FILE.read_text(encoding="utf-8"))
+
+
+def pinned_chunks() -> list[str]:
+    """The always-included rule sections."""
+    return [c for c in load_chunks() if c.startswith(PINNED_HEADINGS)]
+
+
 def build_index() -> int:
-    """Read the agency file and (re)load all its chunks into Chroma."""
-    chunks = split_into_chunks(DATA_FILE.read_text(encoding="utf-8"))
+    """(Re)load the searchable chunks (treks, FAQs) into Chroma."""
+    chunks = [c for c in load_chunks() if not c.startswith(PINNED_HEADINGS)]
 
     # Clear old chunks first, so edits to agency.md don't leave stale copies
     old_ids = collection.get()["ids"]
@@ -55,7 +75,7 @@ def build_index() -> int:
     return len(chunks)
 
 
-def search(question: str, k: int = 3) -> list[str]:
+def search(question: str, k: int = 4) -> list[str]:
     """Return the k chunks whose meaning is closest to the question."""
     results = collection.query(query_texts=[question], n_results=k)
     return results["documents"][0]
