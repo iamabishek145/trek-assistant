@@ -2,21 +2,23 @@
 
 An AI booking assistant for trekking agencies in Nepal. It answers traveller questions from the agency's own information (treks, prices, permits, policies) and collects booking details.
 
-**Stack:** Python · FastAPI · Claude API (Haiku) · ChromaDB (RAG) · *coming:* SQLite/Supabase leads, WhatsApp Cloud API
+**Stack:** Python · FastAPI · Claude API (Haiku, tool use) · ChromaDB (RAG) · SQLite · *coming:* Supabase, WhatsApp Cloud API
 
 ## How it works
 1. The client sends a message plus the conversation history to `POST /chat`.
 2. **Retrieval:** the agency info (`data/agency.md`) is split into sections.
    - **Pinned sections** (inclusions, booking rules, discounts) are sent with every question. Semantic search kept missing them because a question like "total for 6 people?" doesn't *sound* like a discount policy.
-   - **Searchable sections** (treks, FAQs) live in ChromaDB; the 4 closest to the recent conversation are retrieved.
+   - **Searchable sections** (treks, FAQs) live in ChromaDB. Search runs twice, on the new message alone and on recent context, so a fresh question isn't drowned out by the booking chat.
 3. Claude answers using only that context, with a system prompt that blocks guessing, shows price math, applies group discounts, and collects booking details without re-asking.
+4. **Lead capture (tool use):** once the traveller has given name, trek, dates, group size and contact, Claude calls a `save_lead` tool. The server validates the input with Pydantic (bad input goes back to Claude as an error so it asks the traveller), saves it to SQLite, and returns a booking reference. Same contact + trek + date updates the existing lead instead of duplicating it.
+5. **Stateless server:** past tool calls aren't in the text history, so the client sends back the `lead_id` and the server tells Claude the booking is already saved. The last round of the tool loop uses `tool_choice: none` so Claude always ends with a text reply.
 
 ## Status
 - [x] Day 1: FastAPI server + Claude chat endpoint
 - [x] Day 2: Answers grounded in an agency data file
 - [x] Day 3: RAG with ChromaDB
 - [x] Day 4: Conversation history, tighter prompt, pinned rule sections, CLI test client
-- [ ] Day 5: Lead capture with Claude tool use (save bookings to a database)
+- [x] Day 5: Lead capture with Claude tool use, SQLite, `GET /leads`
 - [ ] Next: human handoff, web chat widget, deploy, WhatsApp, demo video
 
 ## Run locally
@@ -39,8 +41,8 @@ Or open http://127.0.0.1:8000/docs and try `POST /chat`:
 ```
 
 ## Testing
-`python chat_cli.py --test` runs 8 scripted conversations (price math across turns, solo vs group rate, inclusions, no guessing on availability, group discount, medical question, off-topic, full booking flow) and prints the expected answer next to each reply.
+`python chat_cli.py --test` runs 10 scripted conversations (price math across turns, solo vs group rate, inclusions, no guessing on availability, group discount, medical question, off-topic, step-by-step booking, one-message booking, incomplete booking that must not save) and prints the expected answer next to each reply.
 
-Debug retrieval with `GET /search?q=your question` to see which sections were retrieved.
+Debug retrieval with `GET /search?q=your question`. See captured leads at `GET /leads` (will be protected with an admin key before deploy). Every `save_lead` call is logged in the server terminal.
 
 > The agency in `data/agency.md` is fictional; all prices are made up for testing.

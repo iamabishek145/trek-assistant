@@ -20,19 +20,27 @@ import httpx
 API_URL = "http://127.0.0.1:8000/chat"
 
 
-def send(message: str, history: list[dict]) -> str:
-    """Send one message plus the history so far, return the bot's reply."""
-    r = httpx.post(API_URL, json={"message": message, "history": history}, timeout=60)
+def send(message: str, history: list[dict], lead_id: int | None) -> tuple[str, int | None]:
+    """Send a message + history + any saved lead id. Returns (reply, lead_id)."""
+    payload = {"message": message, "history": history, "lead_id": lead_id}
+    r = httpx.post(API_URL, json=payload, timeout=60)
     r.raise_for_status()
-    return r.json()["reply"]
+    data = r.json()
+    return data["reply"], data.get("lead_id")
+
+
+def lead_note(old_id: int | None, new_id: int | None) -> str:
+    return f"\n  [lead saved to database: #{new_id}]" if new_id and new_id != old_id else ""
 
 
 def run_conversation(turns: list[str]) -> None:
     """Play a list of user messages, carrying history between them."""
     history: list[dict] = []
+    lead_id = None
     for message in turns:
-        reply = send(message, history)
-        print(f"\n  YOU: {message}\n  BOT: {reply}")
+        reply, new_id = send(message, history, lead_id)
+        print(f"\n  YOU: {message}\n  BOT: {reply}{lead_note(lead_id, new_id)}")
+        lead_id = new_id
         history.append({"role": "user", "content": message})
         history.append({"role": "assistant", "content": reply})
 
@@ -62,8 +70,17 @@ TESTS = [
      "Politely steers back to trekking"),
     ("Booking flow, no repeated questions",
      ["I want to book the Langtang trek", "I'm Sarah",
-      "2 people, starting 5 April", "My WhatsApp is +44 7700 900123"],
-     "Max 2 questions at a time, never re-asks a detail, ends with a one-line summary"),
+      "2 people, starting 5 April", "My WhatsApp is +44 7700 900123",
+      "Thanks! Can I rent sleeping bags there?"],
+     "Never re-asks; [lead saved] ONLY after the WhatsApp message with a #reference; "
+     "sleeping-bag answer: rent in Thamel ~USD 1-2/day, no apology, no new save"),
+    ("Everything in one message",
+     ["Hi, I'm Tom. Please book Poon Hill for 4 people starting 10 November. "
+      "Email: tom@example.com"],
+     "Saves straight away ([lead saved]), summary + #reference, price 4 x USD 450 = USD 1,800"),
+    ("Incomplete booking must NOT save",
+     ["Book EBC for me and my wife in October please"],
+     "No [lead saved] line; asks for name and contact (max 2 things)"),
 ]
 
 
@@ -77,6 +94,7 @@ def run_tests() -> None:
 
 def interactive() -> None:
     history: list[dict] = []
+    lead_id = None
     print("Trek Assistant — type 'quit' to stop, 'reset' to clear history.")
     while True:
         message = input("\nYOU: ").strip()
@@ -84,12 +102,14 @@ def interactive() -> None:
             break
         if message.lower() == "reset":
             history = []
+            lead_id = None
             print("(history cleared)")
             continue
         if not message:
             continue
-        reply = send(message, history)
-        print(f"BOT: {reply}")
+        reply, new_id = send(message, history, lead_id)
+        print(f"BOT: {reply}{lead_note(lead_id, new_id)}")
+        lead_id = new_id
         history.append({"role": "user", "content": message})
         history.append({"role": "assistant", "content": reply})
 
