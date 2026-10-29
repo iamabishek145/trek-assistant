@@ -2,9 +2,11 @@
 
 An AI booking assistant for trekking agencies in Nepal. It answers traveller questions from the agency's own information (treks, prices, permits, policies) and collects booking details.
 
-**Stack:** Python · FastAPI · Claude API (Haiku, tool use) · ChromaDB (RAG) · SQLite · Telegram/Gmail alerts · vanilla JS widget (Shadow DOM) · *coming:* Supabase, WhatsApp Cloud API
+**Stack:** Python · FastAPI · Claude API (Haiku, tool use) · ChromaDB (RAG) · Postgres (Supabase) / SQLite · Telegram/Gmail alerts · vanilla JS widget (Shadow DOM) · Render · *coming:* WhatsApp Cloud API
 
-**Try it:** run the server and open http://127.0.0.1:8000/demo, a sample agency site with the chat widget.
+**🔴 Live demo: https://trek-assistant.onrender.com/demo** (free hosting: the first load after 15 idle minutes takes ~50 s to wake up)
+
+A sample agency site with the chat widget. Try booking a trek, or say you're stuck on the trail to trigger an urgent handoff.
 
 ## How it works
 0. **Widget:** an agency adds one line to their site: `<script src="https://SERVER/static/widget.js" data-name="Agency" data-color="#0f3d3e" defer></script>`. The widget lives in a Shadow DOM (the agency's CSS can't break it), escapes all bot output before rendering, keeps the chat across page reloads, and goes full-screen on phones. Pages can open it with a question: `TrekAssistant.open("Tell me about EBC")`.
@@ -26,7 +28,8 @@ An AI booking assistant for trekking agencies in Nepal. It answers traveller que
 - [x] Day 6: Human handoff with urgency levels, Telegram/Gmail alerts, `GET /handoffs`
 - [x] Day 7: Embeddable web chat widget + sample agency page (`/demo`)
 - [x] Day 8: Security hardening: admin key, rate limits, input caps, fixed trek names
-- [ ] Next: deploy (Render + Supabase), WhatsApp, demo video
+- [x] Day 9: Deployed on Render (Singapore) with Supabase Postgres; SQLite stays for local dev
+- [ ] Next: demo video, WhatsApp, agency pilots
 
 ## Security
 - **Admin endpoints** (`/leads`, `/handoffs`, `/search`) need an `X-Admin-Key` header matching `ADMIN_KEY`; compared with `secrets.compare_digest` (constant time). If `ADMIN_KEY` isn't set they refuse everyone. In `/docs`, use the Authorize button.
@@ -34,6 +37,12 @@ An AI booking assistant for trekking agencies in Nepal. It answers traveller que
 - **Tool input is validated**, not trusted: Pydantic checks every field, and `trek` must be one of the names in `data/agency.md`.
 - **Widget output is escaped** before rendering, so a model reply can't inject HTML/JS into the agency's site.
 - **CORS:** set `ALLOWED_ORIGINS` to the agency's domain in production.
+
+## Deployment
+- **Server:** Render web service (free tier, Singapore). Build `pip install -r requirements.txt`, start `uvicorn main:app --host 0.0.0.0 --port $PORT`, health check `/`.
+- **Database:** Supabase Postgres via the Session pooler (`DATABASE_URL`). Free hosts wipe local files on restart, so leads can't live in SQLite there. Row Level Security is enabled on both tables so Supabase's public REST API can't read them; the server connects as the owner.
+- **Config:** all secrets are environment variables on Render (`ANTHROPIC_API_KEY`, `ADMIN_KEY`, `DATABASE_URL`, `TELEGRAM_*`, `PYTHON_VERSION`); nothing secret is in the repo.
+- Dependencies are pinned in `requirements.txt` to the versions tested locally.
 
 ## Run locally
 ```bash
