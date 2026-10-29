@@ -19,7 +19,10 @@ import sys
 
 import httpx
 
-API_URL = "http://127.0.0.1:8000/chat"
+import os
+
+# Local by default. To test the live site:  TREK_API_URL=https://trek-assistant.onrender.com python chat_cli.py
+API_URL = os.getenv("TREK_API_URL", "http://127.0.0.1:8000").rstrip("/") + "/chat"
 
 
 class Conversation:

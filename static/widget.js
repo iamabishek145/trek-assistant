@@ -145,7 +145,7 @@
   <section class="panel" role="dialog" aria-label="Chat with ${NAME}">
     <header>
       <div class="avatar">🏔️</div>
-      <div class="title"><b>${NAME}</b><span>AI assistant · replies instantly</span></div>
+      <div class="title"><b>${NAME}</b><span>AI assistant · online 24/7</span></div>
       <button class="icon-btn reset" title="Start a new chat" aria-label="Start a new chat">↺</button>
       <button class="icon-btn close" title="Close" aria-label="Close chat">✕</button>
     </header>

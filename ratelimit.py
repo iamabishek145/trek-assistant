@@ -9,6 +9,7 @@ call it. Two limits, kept in memory (fine for a single server process):
 """
 
 import os
+import threading
 import time
 from collections import defaultdict, deque
 
@@ -22,25 +23,27 @@ DAILY_CAP = int(os.getenv("DAILY_MESSAGE_CAP") or 500)
 
 _hits: dict[str, deque] = defaultdict(deque)  # ip -> times of recent messages
 _today = {"date": "", "count": 0}
+_lock = threading.Lock()  # FastAPI runs requests in parallel threads
 
 
 def check(ip: str) -> str | None:
     """Return None if this message is allowed, otherwise a polite reason."""
-    now = time.time()
-    date = time.strftime("%Y-%m-%d", time.gmtime(now))
-    if _today["date"] != date:  # new day (UTC): reset the daily counter
-        _today.update(date=date, count=0)
-        _hits.clear()
-    if _today["count"] >= DAILY_CAP:
-        return "Our assistant is very busy today. Please message the team on WhatsApp."
+    with _lock:
+        now = time.time()
+        date = time.strftime("%Y-%m-%d", time.gmtime(now))
+        if _today["date"] != date:  # new day (UTC): reset the counters
+            _today.update(date=date, count=0)
+            _hits.clear()
+        if _today["count"] >= DAILY_CAP:
+            return "Our assistant is very busy today. Please message the team on WhatsApp."
 
-    hits = _hits[ip]
-    while hits and hits[0] < now - WINDOW_SECONDS:  # forget old messages
-        hits.popleft()
-    if len(hits) >= PER_IP:
-        minutes = int((hits[0] + WINDOW_SECONDS - now) // 60) + 1
-        return f"You're sending messages very fast. Please try again in about {minutes} min."
+        hits = _hits[ip]
+        while hits and hits[0] < now - WINDOW_SECONDS:  # forget old messages
+            hits.popleft()
+        if len(hits) >= PER_IP:
+            minutes = int((hits[0] + WINDOW_SECONDS - now) // 60) + 1
+            return f"You're sending messages very fast. Please try again in about {minutes} min."
 
-    hits.append(now)
-    _today["count"] += 1
-    return None
+        hits.append(now)
+        _today["count"] += 1
+        return None

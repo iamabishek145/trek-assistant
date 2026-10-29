@@ -11,7 +11,9 @@ A sample agency site with the chat widget. Try booking a trek, or say you're stu
 ## How it works
 0. **Widget:** an agency adds one line to their site: `<script src="https://SERVER/static/widget.js" data-name="Agency" data-color="#0f3d3e" defer></script>`. The widget lives in a Shadow DOM (the agency's CSS can't break it), escapes all bot output before rendering, keeps the chat across page reloads, and goes full-screen on phones. Pages can open it with a question: `TrekAssistant.open("Tell me about EBC")`.
 1. The client sends a message plus the conversation history to `POST /chat`.
-2. **Retrieval:** the agency info (`data/agency.md`) is split into sections.
+2. **Knowledge:** the agency info (`data/agency.md`) is split into sections.
+   - **Small agency file (now, ~3k characters): full context.** Every section is sent with every message, marked for Anthropic prompt caching. I started with RAG, but measured 12–15 s replies on the free server: running the embedding model twice per message on 0.1 CPU dominated the time. For a knowledge base this small, retrieval adds latency and the risk of missing a section, without saving meaningful tokens.
+   - **Large agency file (over ~15k characters) or `RAG_MODE=always`: RAG.** ChromaDB is loaded only then.
    - **Pinned sections** (inclusions, booking rules, discounts) are sent with every question. Semantic search kept missing them because a question like "total for 6 people?" doesn't *sound* like a discount policy.
    - **Searchable sections** (treks, FAQs) live in ChromaDB. Search runs twice, on the new message alone and on recent context, so a fresh question isn't drowned out by the booking chat.
 3. Claude answers using only that context, with a system prompt that blocks guessing, shows price math, applies group discounts, and collects booking details without re-asking.
@@ -29,11 +31,14 @@ A sample agency site with the chat widget. Try booking a trek, or say you're stu
 - [x] Day 7: Embeddable web chat widget + sample agency page (`/demo`)
 - [x] Day 8: Security hardening: admin key, rate limits, input caps, fixed trek names
 - [x] Day 9: Deployed on Render (Singapore) with Supabase Postgres; SQLite stays for local dev
+- [x] Day 9 review: full-context mode for small agencies (speed), DB-down fallback to Telegram, friendly errors when Claude is busy, spoof-resistant rate-limit IP, per-message timing logs
 - [ ] Next: demo video, WhatsApp, agency pilots
 
 ## Security
 - **Admin endpoints** (`/leads`, `/handoffs`, `/search`) need an `X-Admin-Key` header matching `ADMIN_KEY`; compared with `secrets.compare_digest` (constant time). If `ADMIN_KEY` isn't set they refuse everyone. In `/docs`, use the Authorize button.
 - **Cost protection on `/chat`:** 20 messages per visitor per 10 min, 500 per day server-wide, 1,000-character messages, last 20 messages of history sent to Claude. Limits are in-memory (single process).
+- **Graceful failures:** if the database is down, a booking is sent to the team's Telegram instead of being lost, and handoff alerts go out even if saving fails; if Claude is overloaded, visitors get a "try again in a moment" message.
+- **Rate-limit IP** comes from `True-Client-IP` / `CF-Connecting-IP` (set by the host's edge, not fakeable), falling back to `X-Forwarded-For`. Check what the server sees at `/debug/ip`.
 - **Tool input is validated**, not trusted: Pydantic checks every field, and `trek` must be one of the names in `data/agency.md`.
 - **Widget output is escaped** before rendering, so a model reply can't inject HTML/JS into the agency's site.
 - **CORS:** set `ALLOWED_ORIGINS` to the agency's domain in production.

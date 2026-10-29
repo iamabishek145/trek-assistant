@@ -3,12 +3,13 @@ Trek Assistant — FastAPI server.
 
 POST /chat      answers a traveller's message using the agency info (via RAG)
                 and the conversation history the client sends along.
-                Claude has two tools: save_lead (booking details -> SQLite)
+                Claude has two tools: save_lead (booking details -> database)
                 and request_handoff (alert the team to take over).
 GET  /leads     lists captured leads     (agency only: X-Admin-Key header)
 GET  /handoffs  lists handoff requests   (agency only: X-Admin-Key header)
 GET  /demo      sample agency website with the chat widget (static/).
-GET  /search debug: shows which agency sections retrieval picks.
+GET  /search     debug: which agency sections retrieval picks (admin only)
+GET  /debug/ip  shows which IP the rate limiter sees for you
 
 Run:
     uvicorn main:app --reload
@@ -17,9 +18,11 @@ Then open http://127.0.0.1:8000/demo, or chat with: python chat_cli.py
 
 import os
 import secrets
+import time
 from pathlib import Path
 from typing import Literal
 
+import anthropic
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
@@ -32,12 +35,13 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from leads import init_db, list_handoffs, list_leads, save_handoff, save_lead
 from notify import send_alert
 import ratelimit
-from rag import build_index, pinned_chunks, search, trek_names
+from rag import build_index, load_chunks, pinned_chunks, search, trek_names, use_rag
 
 load_dotenv()  # reads ANTHROPIC_API_KEY from your .env file
 
 
-client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+# timeout: give up on a stuck call after 30 s; the SDK retries twice on errors
+client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"), timeout=30, max_retries=2)
 MODEL = "claude-haiku-5-5"
 
 SYSTEM_PROMPT = """You are the friendly booking assistant for Himalaya Trails Demo,
@@ -147,8 +151,8 @@ REQUEST_HANDOFF_TOOL = {
 }
 
 TOOLS = [SAVE_LEAD_TOOL, REQUEST_HANDOFF_TOOL]
-MAX_TOOL_ROUNDS = 3
-MAX_HISTORY = 20  # only send the last 20 messages to Claude (cost control)  # safety limit so a confused model can't loop forever
+MAX_TOOL_ROUNDS = 3  # safety limit so a confused model can't loop forever
+MAX_HISTORY = 20     # only send the last 20 messages to Claude (cost control)
 
 app = FastAPI(title="Trek Assistant")
 
@@ -163,9 +167,17 @@ app.add_middleware(
 )
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-init_db()                    # create leads.db + table if needed
-CHUNK_COUNT = build_index()  # load trek + FAQ chunks into ChromaDB at startup
-PINNED = pinned_chunks()     # rule sections, sent with every question
+init_db()  # create the tables if needed (Supabase, or leads.db locally)
+
+# Small agency file -> send all of it with every message (fast, nothing to
+# miss). Big file -> RAG: pinned rules + search. See rag.py for the reasoning.
+USE_RAG = use_rag()
+if USE_RAG:
+    CHUNK_COUNT = build_index()  # load trek + FAQ chunks into ChromaDB
+    PINNED = pinned_chunks()     # rule sections, sent with every question
+else:
+    AGENCY_INFO = "\n\n---\n\n".join(load_chunks())
+print(f"[startup] knowledge mode: {'RAG' if USE_RAG else 'full context'}")
 
 
 class Message(BaseModel):
@@ -218,7 +230,19 @@ def run_save_lead(tool_input: dict) -> tuple[str, bool, int | None]:
         problems = ", ".join(f"{err['loc'][0]}: {err['msg']}" for err in e.errors())
         # Sent back to Claude as an error, so it asks the traveller to fix it
         return f"Not saved. Fix these with the traveller first: {problems}", True, None
-    lead_id = save_lead(**lead.model_dump())
+    try:
+        lead_id = save_lead(**lead.model_dump())
+    except Exception as e:
+        # Database down (e.g. Supabase paused)? Don't lose the customer:
+        # send the booking straight to the team instead.
+        print(f"[error] save_lead failed: {type(e).__name__}: {e}")
+        details = "\n".join(f"{k}: {v}" for k, v in lead.model_dump().items() if v)
+        if send_alert("⚠️ Booking NOT saved (database error)", details):
+            return ("The database had a problem, but the booking details were sent "
+                    "to the team directly. There's no reference number; tell the "
+                    "traveller a team member will contact them."), False, None
+        return ("Saving failed. Apologise and ask the traveller to message the "
+                "agency on WhatsApp directly."), True, None
     return f"Saved. Booking reference: #{lead_id}", False, lead_id
 
 
@@ -229,15 +253,26 @@ def run_request_handoff(tool_input: dict, transcript: str) -> tuple[str, bool, i
     except ValidationError as e:
         problems = ", ".join(f"{err['loc'][0]}: {err['msg']}" for err in e.errors())
         return f"Not saved: {problems}", True, None
-    handoff_id = save_handoff(**handoff.model_dump(), transcript=transcript)
+    try:
+        handoff_id = save_handoff(**handoff.model_dump(), transcript=transcript)
+    except Exception as e:
+        # The alert matters more than the database row: still send it
+        print(f"[error] save_handoff failed: {type(e).__name__}: {e}")
+        handoff_id = None
+    ref = f"H-{handoff_id}" if handoff_id else "H-? (not saved)"
 
     icon = "🚨 URGENT" if handoff.priority == "urgent" else "🙋"
     who = " ".join(filter(None, [handoff.name, f"({handoff.contact})" if handoff.contact else ""]))
-    send_alert(
-        subject=f"{icon} Handoff H-{handoff_id}: {handoff.reason}",
+    alerted = send_alert(
+        subject=f"{icon} Handoff {ref}: {handoff.reason}",
         text=(f"Traveller: {who or 'unknown, no contact given'}\n"
               f"Reason: {handoff.reason}\n\nLast messages:\n{transcript}"),
     )
+    if not handoff_id and not alerted:
+        return ("Alerting the team failed. Apologise and give the agency WhatsApp "
+                "number so they can contact the team directly."), True, None
+    if not handoff_id:
+        return "Team alerted (no reference number available).", False, None
     return f"Team alerted. Handoff reference: H-{handoff_id}", False, handoff_id
 
 
@@ -276,8 +311,17 @@ def require_admin(key: str | None = Security(admin_key_header)):
 
 
 def client_ip(request: Request) -> str:
-    """The visitor's IP. Behind a host like Render, the real IP is in the
-    X-Forwarded-For header (the direct connection is the host's proxy)."""
+    """The visitor's IP, for rate limiting.
+
+    On Render the direct connection is Render's proxy, so the real IP comes
+    from headers. Render's edge (Cloudflare) sets True-Client-IP /
+    CF-Connecting-IP itself and overwrites any value a visitor sends, so
+    those can't be faked. X-Forwarded-For CAN be faked (visitors can add
+    their own entries), so it's only a fallback.
+    """
+    for header in ("true-client-ip", "cf-connecting-ip"):
+        if request.headers.get(header):
+            return request.headers[header].strip()
     forwarded = request.headers.get("x-forwarded-for")
     return forwarded.split(",")[0].strip() if forwarded else request.client.host
 
@@ -295,16 +339,33 @@ def chat(req: ChatRequest, request: Request):
     if blocked:
         raise HTTPException(status_code=429, detail=blocked)
     req.history = req.history[-MAX_HISTORY:]
+    started = time.perf_counter()
 
-    context = "\n\n---\n\n".join(PINNED + retrieve(req.message, req.history))
-    system = SYSTEM_PROMPT + "\n\nUse ONLY this agency information:\n" + context
+    if USE_RAG:
+        context = "\n\n---\n\n".join(PINNED + retrieve(req.message, req.history))
+    else:
+        context = AGENCY_INFO
+    retrieval_s = time.perf_counter() - started
+
+    # The system prompt is sent as blocks. The big first block (instructions +
+    # agency info) is the same for every message in full-context mode, so we
+    # mark it for prompt caching: Anthropic can reuse it, which is faster and
+    # cheaper. The small per-conversation notes go in a separate block.
+    main_block = {"type": "text",
+                  "text": SYSTEM_PROMPT + "\n\nUse ONLY this agency information:\n" + context}
+    if not USE_RAG:
+        main_block["cache_control"] = {"type": "ephemeral"}
+    system = [main_block]
+    notes = []
     if req.lead_id:
         # The server is stateless: this is how it knows a save already happened
-        system += (f"\n\nThis traveller's booking is ALREADY SAVED as #{req.lead_id}. "
-                   "Only call save_lead again if they change a detail.")
+        notes.append(f"This traveller's booking is ALREADY SAVED as #{req.lead_id}. "
+                     "Only call save_lead again if they change a detail.")
     if req.handoff_id:
-        system += (f"\n\nThe team was ALREADY ALERTED (handoff H-{req.handoff_id}). "
-                   "Don't call request_handoff again; reassure them someone is coming.")
+        notes.append(f"The team was ALREADY ALERTED (handoff H-{req.handoff_id}). "
+                     "Don't call request_handoff again; reassure them someone is coming.")
+    if notes:
+        system.append({"type": "text", "text": "\n".join(notes)})
 
     messages = [m.model_dump() for m in req.history]
     messages.append({"role": "user", "content": req.message})
@@ -314,18 +375,31 @@ def chat(req: ChatRequest, request: Request):
     # 1. Ask Claude. 2. If it wants a tool, run it and send back the result.
     # 3. Repeat until Claude answers in plain text. On the last round we
     #    forbid tools (tool_choice none) so Claude MUST reply in words.
+    claude_s, tools_s, calls = 0.0, 0.0, 0
     for round_number in range(MAX_TOOL_ROUNDS + 1):
         last_round = round_number == MAX_TOOL_ROUNDS
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=500,
-            system=system,
-            tools=TOOLS,
-            tool_choice={"type": "none"} if last_round else {"type": "auto"},
-            messages=messages,
-        )
+        t = time.perf_counter()
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=500,
+                system=system,
+                tools=TOOLS,
+                tool_choice={"type": "none"} if last_round else {"type": "auto"},
+                messages=messages,
+            )
+        except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
+            # Claude overloaded / unreachable: a friendly message, not a crash
+            print(f"[error] Claude API: {type(e).__name__}: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail="Our assistant is busy right now. Please try again in a moment.",
+            )
+        claude_s += time.perf_counter() - t
+        calls += 1
         if response.stop_reason != "tool_use":
             break
+        t = time.perf_counter()
 
         tool_results = []
         for block in response.content:
@@ -349,7 +423,12 @@ def chat(req: ChatRequest, request: Request):
             })
         messages.append({"role": "assistant", "content": response.content})
         messages.append({"role": "user", "content": tool_results})
+        tools_s += time.perf_counter() - t
 
+    # One log line per message, so we can see where the time goes
+    print(f"[timing] total {time.perf_counter() - started:.1f}s | "
+          f"retrieval {retrieval_s:.2f}s | claude {claude_s:.1f}s ({calls} call(s)) | "
+          f"tools {tools_s:.1f}s")
     reply = "".join(b.text for b in response.content if b.type == "text").strip()
     if not reply:
         reply = "Sorry, something went wrong on our side. A team member will follow up."
@@ -374,5 +453,18 @@ def get_handoffs():
 
 @app.get("/search", dependencies=[Depends(require_admin)])
 def search_chunks(q: str):
-    return {"chunks_indexed": CHUNK_COUNT, "results": search(q)
-}
+    if not USE_RAG:
+        return {"mode": "full context: every section is sent with every message"}
+    return {"chunks_indexed": CHUNK_COUNT, "results": search(q)}
+
+
+@app.get("/debug/ip")
+def debug_ip(request: Request):
+    """Shows the IP the rate limiter uses for YOU (and the headers it came
+    from). Only reflects your own request, so it's safe to leave public."""
+    return {
+        "rate_limit_key": client_ip(request),
+        "true_client_ip": request.headers.get("true-client-ip"),
+        "cf_connecting_ip": request.headers.get("cf-connecting-ip"),
+        "x_forwarded_for": request.headers.get("x-forwarded-for"),
+    }
